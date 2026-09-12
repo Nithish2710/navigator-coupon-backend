@@ -1,0 +1,244 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DiscountType {
+  FIXED
+  PERCENTAGE
+}
+
+enum CouponStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EligibilityType {
+  ALL
+  CATEGORY
+  PRODUCT
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model Company {
+  id            String         @id @default(uuid())
+  name          String
+  code          String         @unique
+  contactPerson String?
+  email         String?
+  phone         String?
+  status        CompanyStatus  @default(ACTIVE)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  coupons       Coupon[]
+  usages        CouponUsage[]
+
+  @@index([code])
+  @@index([status])
+}
+
+model Coupon {
+  id                 String          @id @default(uuid())
+  companyId          String
+  code               String          @unique
+  type               DiscountType
+  value              Float
+  minimumOrderAmount Float?
+  maximumDiscount    Float?
+  usageLimit         Int?
+  usageCount         Int             @default(0)
+  startsAt           DateTime
+  expiresAt          DateTime
+  status             CouponStatus    @default(ACTIVE)
+  eligibilityType    EligibilityType @default(ALL)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  company            Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  usages             CouponUsage[]
+  eligibleCategories CouponEligibleCategory[]
+  eligibleProducts   CouponEligibleProduct[]
+
+  @@index([code])
+  @@index([companyId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+model CouponEligibleCategory {
+  id         String   @id @default(uuid())
+  couponId   String
+  categoryId String
+
+  coupon     Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, categoryId])
+  @@index([couponId])
+  @@index([categoryId])
+}
+
+model CouponEligibleProduct {
+  id        String  @id @default(uuid())
+  couponId  String
+  productId String
+
+  coupon    Coupon  @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, productId])
+  @@index([couponId])
+  @@index([productId])
+}
+
+model CouponUsage {
+  id             String    @id @default(uuid())
+  couponId       String
+  companyId      String
+  orderId        String    @unique
+  customerId     String?
+  customerEmail  String?
+  orderAmount    Float
+  discountAmount Float
+  redeemedAt     DateTime  @default(now())
+
+  coupon         Coupon    @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  company        Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([couponId])
+  @@index([companyId])
+  @@index([orderId])
+  @@index([customerId])
+  @@index([redeemedAt])
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products    Product[]
+  couponEligibleCategories CouponEligibleCategory[]
+
+  @@index([slug])
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  title          String
+  slug           String   @unique
+  description    String
+  price          Float
+  compareAtPrice Float?
+  sku            String   @unique
+  stock          Int      @default(100)
+  fabric         String?
+  color          String?
+  colourHex      String?
+  images         String   @default("[]")
+  details        String?  @default("[]")
+  fabricCare     String?
+  badge          String?
+  categoryId     String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  category       Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  orderItems     OrderItem[]
+  couponEligibleProducts CouponEligibleProduct[]
+
+  @@index([slug])
+  @@index([categoryId])
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  firstName String?
+  lastName  String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders    Order[]
+  couponUsages CouponUsage[]
+
+  @@index([email])
+}
+
+model Order {
+  id                 String        @id @default(uuid())
+  orderNumber        String        @unique
+  customerId         String?
+  customerEmail      String
+  shippingName       String
+  shippingAddress    String
+  shippingCity       String
+  shippingPostalCode String
+  shippingCountry    String        @default("India")
+  subtotal           Float
+  discountAmount     Float         @default(0)
+  couponCode         String?
+  shippingAmount     Float         @default(0)
+  totalAmount        Float
+  status             OrderStatus   @default(CONFIRMED)
+  paymentStatus      PaymentStatus @default(PAID)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  customer           Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items              OrderItem[]
+  couponUsage        CouponUsage?
+
+  @@index([orderNumber])
+  @@index([customerId])
+  @@index([customerEmail])
+  @@index([status])
+}
+
+model OrderItem {
+  id        String  @id @default(uuid())
+  orderId   String
+  productId String
+  title     String
+  price     Float
+  quantity  Int
+  size      String?
+  subtotal  Float
+
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+}
