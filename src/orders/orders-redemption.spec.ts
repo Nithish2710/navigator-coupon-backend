@@ -7,21 +7,34 @@ describe('OrdersService - Transactional Redemption & Concurrency Protection', ()
   let mockPrisma: any;
   let couponEngine: CouponEngineService;
 
+  const sampleProducts = [
+    {
+      id: 'p1',
+      slug: 'coastal-blue-cotton-shirt',
+      sku: 'NAV-SHIRT-001',
+      title: 'Coastal Blue Cotton Shirt',
+      price: 1499,
+      stock: 10,
+      categoryId: 'cat1',
+    },
+    {
+      id: 'p2',
+      slug: 'forest-linen-shirt',
+      sku: 'NAV-SHIRT-008',
+      title: 'Forest Linen Shirt',
+      price: 2299,
+      stock: 3,
+      categoryId: 'cat2',
+    },
+  ];
+
   beforeEach(() => {
     mockPrisma = {
       $transaction: jest.fn(async (cb) => {
         return cb(mockPrisma);
       }),
       product: {
-        findMany: jest.fn().mockResolvedValue([
-          {
-            id: 'p1',
-            title: 'Coastal Blue Cotton Shirt',
-            price: 1499,
-            stock: 10,
-            categoryId: 'cat1',
-          },
-        ]),
+        findMany: jest.fn().mockImplementation(() => Promise.resolve(sampleProducts)),
         update: jest.fn(),
       },
       coupon: {
@@ -117,12 +130,11 @@ describe('OrdersService - Transactional Redemption & Concurrency Protection', ()
       }),
     ).rejects.toThrow(BadRequestException);
 
-    // Coupon increment and usage record must NOT be created
     expect(mockPrisma.coupon.update).not.toHaveBeenCalled();
     expect(mockPrisma.couponUsage.create).not.toHaveBeenCalled();
   });
 
-  it('should successfully process an order with multiple sizes of the same product', async () => {
+  it('should successfully process an order with multiple sizes of the same product and aggregate stock decrements', async () => {
     mockPrisma.coupon.findUnique.mockResolvedValue({
       id: 'c1',
       companyId: 'comp1',
@@ -149,17 +161,61 @@ describe('OrdersService - Transactional Redemption & Concurrency Protection', ()
       couponCode: 'STELLAR50',
       items: [
         { productId: 'p1', quantity: 1, size: 'M' },
-        { productId: 'p1', quantity: 1, size: 'L' },
+        { productId: 'p1', quantity: 2, size: 'L' },
       ],
     });
 
     expect(order).toBeDefined();
-    expect(order.subtotal).toBe(2998);
+    expect(order.subtotal).toBe(1499 * 3);
     expect(order.discountAmount).toBe(50);
-    expect(order.totalAmount).toBe(2948);
+    expect(order.totalAmount).toBe(1499 * 3 - 50);
     expect(mockPrisma.product.update).toHaveBeenCalledWith({
       where: { id: 'p1' },
-      data: { stock: { decrement: 2 } },
+      data: { stock: { decrement: 3 } },
     });
+  });
+
+  it('should reject order if requested quantity across all chosen sizes exceeds available stock', async () => {
+    await expect(
+      ordersService.createOrder({
+        customerEmail: 'test@example.com',
+        shippingName: 'Vikram Singh',
+        shippingAddress: '123 MG Road',
+        shippingCity: 'Bengaluru',
+        shippingPostalCode: '560001',
+        items: [
+          { productId: 'p2', quantity: 2, size: 'M' },
+          { productId: 'p2', quantity: 2, size: 'L' }, // Total requested = 4, but stock = 3
+        ],
+      }),
+    ).rejects.toThrow(/Insufficient stock/);
+  });
+
+  it('should reject order if items array is empty', async () => {
+    await expect(
+      ordersService.createOrder({
+        customerEmail: 'test@example.com',
+        shippingName: 'Vikram Singh',
+        shippingAddress: '123 MG Road',
+        shippingCity: 'Bengaluru',
+        shippingPostalCode: '560001',
+        items: [],
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('should reject order if a product identifier cannot be resolved', async () => {
+    mockPrisma.product.findMany.mockResolvedValue([]);
+
+    await expect(
+      ordersService.createOrder({
+        customerEmail: 'test@example.com',
+        shippingName: 'Vikram Singh',
+        shippingAddress: '123 MG Road',
+        shippingCity: 'Bengaluru',
+        shippingPostalCode: '560001',
+        items: [{ productId: 'non-existent-id', quantity: 1, size: 'M' }],
+      }),
+    ).rejects.toThrow(/One or more products in the order could not be found/);
   });
 });
