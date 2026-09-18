@@ -24,28 +24,42 @@ export class OrdersService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1. Fetch trusted product details from database using unique product IDs
-      const uniqueProductIds = Array.from(new Set(dto.items.map((i) => i.productId)));
+      // 1. Fetch trusted product details from database (resilient to id, slug, and sku)
+      const rawIdentifiers = Array.from(new Set(dto.items.map((i) => i.productId)));
       const dbProducts = await tx.product.findMany({
-        where: { id: { in: uniqueProductIds } },
+        where: {
+          OR: [
+            { id: { in: rawIdentifiers } },
+            { slug: { in: rawIdentifiers } },
+            { sku: { in: rawIdentifiers } },
+          ],
+        },
         include: { category: true },
       });
 
-      if (dbProducts.length !== uniqueProductIds.length) {
-        throw new BadRequestException('One or more products in the order could not be found.');
+      const productMap = new Map<string, typeof dbProducts[0]>();
+      for (const prod of dbProducts) {
+        productMap.set(prod.id, prod);
+        productMap.set(prod.slug, prod);
+        productMap.set(prod.sku, prod);
       }
 
-      const productMap = new Map(dbProducts.map((p) => [p.id, p]));
+      for (const item of dto.items) {
+        if (!productMap.has(item.productId)) {
+          throw new BadRequestException(`One or more products in the order could not be found.`);
+        }
+      }
 
       // Validate total quantity per product across all chosen sizes
       const totalRequestedQuantities = new Map<string, number>();
       for (const item of dto.items) {
-        const current = totalRequestedQuantities.get(item.productId) || 0;
-        totalRequestedQuantities.set(item.productId, current + item.quantity);
+        const prod = productMap.get(item.productId)!;
+        const current = totalRequestedQuantities.get(prod.id) || 0;
+        totalRequestedQuantities.set(prod.id, current + item.quantity);
       }
 
       for (const [prodId, totalQty] of totalRequestedQuantities.entries()) {
-        const prod = productMap.get(prodId);
+        const prod = dbProducts.find((p) => p.id === prodId);
         if (!prod) {
           throw new BadRequestException(`Product ${prodId} not found.`);
         }
