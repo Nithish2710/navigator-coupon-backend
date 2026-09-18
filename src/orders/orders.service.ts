@@ -276,10 +276,13 @@ export class OrdersService {
         take: limit,
         orderBy: { createdAt: 'desc' },
         include: {
-          items: true,
+          items: {
+            include: { product: true },
+          },
           couponUsage: {
             include: { coupon: true, company: true },
           },
+          customer: true,
         },
       }),
     ]);
