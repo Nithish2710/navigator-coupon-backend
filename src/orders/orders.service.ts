@@ -24,20 +24,37 @@ export class OrdersService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1. Fetch trusted product details from database
-      const productIds = dto.items.map((i) => i.productId);
+      // 1. Fetch trusted product details from database using unique product IDs
+      const uniqueProductIds = Array.from(new Set(dto.items.map((i) => i.productId)));
       const dbProducts = await tx.product.findMany({
-        where: { id: { in: productIds } },
+        where: { id: { in: uniqueProductIds } },
         include: { category: true },
       });
 
-      if (dbProducts.length !== productIds.length) {
+      if (dbProducts.length !== uniqueProductIds.length) {
         throw new BadRequestException('One or more products in the order could not be found.');
       }
 
       const productMap = new Map(dbProducts.map((p) => [p.id, p]));
 
-      // 2. Validate stock & compute authoritative subtotal
+      // Validate total quantity per product across all chosen sizes
+      const totalRequestedQuantities = new Map<string, number>();
+      for (const item of dto.items) {
+        const current = totalRequestedQuantities.get(item.productId) || 0;
+        totalRequestedQuantities.set(item.productId, current + item.quantity);
+      }
+
+      for (const [prodId, totalQty] of totalRequestedQuantities.entries()) {
+        const prod = productMap.get(prodId);
+        if (!prod) {
+          throw new BadRequestException(`Product ${prodId} not found.`);
+        }
+        if (prod.stock < totalQty) {
+          throw new BadRequestException(`Insufficient stock for "${prod.title}". Available: ${prod.stock}`);
+        }
+      }
+
+      // 2. Validate line items & compute authoritative subtotal
       let authoritativeSubtotal = 0;
       const orderItemsData: {
         productId: string;
@@ -50,15 +67,7 @@ export class OrdersService {
       }[] = [];
 
       for (const item of dto.items) {
-        const prod = productMap.get(item.productId);
-        if (!prod) {
-          throw new BadRequestException(`Product ${item.productId} not found.`);
-        }
-
-        if (prod.stock < item.quantity) {
-          throw new BadRequestException(`Insufficient stock for "${prod.title}". Available: ${prod.stock}`);
-        }
-
+        const prod = productMap.get(item.productId)!;
         const itemSubtotal = prod.price * item.quantity;
         authoritativeSubtotal += itemSubtotal;
 
@@ -204,12 +213,12 @@ export class OrdersService {
         });
       }
 
-      // 8. Deduct stock
-      for (const item of orderItemsData) {
+      // 8. Deduct stock per product
+      for (const [prodId, totalQty] of totalRequestedQuantities.entries()) {
         await tx.product.update({
-          where: { id: item.productId },
+          where: { id: prodId },
           data: {
-            stock: { decrement: item.quantity },
+            stock: { decrement: totalQty },
           },
         });
       }

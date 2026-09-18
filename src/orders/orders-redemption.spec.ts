@@ -121,4 +121,45 @@ describe('OrdersService - Transactional Redemption & Concurrency Protection', ()
     expect(mockPrisma.coupon.update).not.toHaveBeenCalled();
     expect(mockPrisma.couponUsage.create).not.toHaveBeenCalled();
   });
+
+  it('should successfully process an order with multiple sizes of the same product', async () => {
+    mockPrisma.coupon.findUnique.mockResolvedValue({
+      id: 'c1',
+      companyId: 'comp1',
+      code: 'STELLAR50',
+      status: 'ACTIVE',
+      type: 'FIXED',
+      value: 50,
+      minimumOrderAmount: 500,
+      usageLimit: 500,
+      usageCount: 0,
+      startsAt: new Date('2026-01-01'),
+      expiresAt: new Date('2026-12-31'),
+      company: { id: 'comp1', name: 'Stellar Solutions', status: 'ACTIVE' },
+      eligibleCategories: [],
+      eligibleProducts: [],
+    });
+
+    const order = await ordersService.createOrder({
+      customerEmail: 'test@example.com',
+      shippingName: 'Vikram Singh',
+      shippingAddress: '123 MG Road',
+      shippingCity: 'Bengaluru',
+      shippingPostalCode: '560001',
+      couponCode: 'STELLAR50',
+      items: [
+        { productId: 'p1', quantity: 1, size: 'M' },
+        { productId: 'p1', quantity: 1, size: 'L' },
+      ],
+    });
+
+    expect(order).toBeDefined();
+    expect(order.subtotal).toBe(2998);
+    expect(order.discountAmount).toBe(50);
+    expect(order.totalAmount).toBe(2948);
+    expect(mockPrisma.product.update).toHaveBeenCalledWith({
+      where: { id: 'p1' },
+      data: { stock: { decrement: 2 } },
+    });
+  });
 });
